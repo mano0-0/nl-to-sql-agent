@@ -49,6 +49,10 @@ nl-sql "which authors sell best in Japan?"
 nl-sql --show-sql "what is the average order value by region?"
 ```
 
+Or keep it in a file: `cp .env.example .env` and fill in the key. `.env` is
+gitignored. Bring your own key -- there is none in this repository, and none
+is needed for `--offline`, the tests, or CI.
+
 Other providers, same pipeline:
 
 ```bash
