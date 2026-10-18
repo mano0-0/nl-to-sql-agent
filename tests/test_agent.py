@@ -233,3 +233,71 @@ def test_large_results_are_sampled_but_the_count_is_honest(db):
 ])
 def test_extract_sql(raw, expected):
     assert extract_sql(raw) == expected
+
+
+# --------------------------------------------------------------------------
+# Provider plumbing. No network: the HTTP layer is stubbed.
+# --------------------------------------------------------------------------
+
+def test_openai_compatible_model_sends_and_parses_correctly(monkeypatch):
+    import json
+    from nl_to_sql_agent import models
+
+    captured = {}
+
+    class FakeResponse:
+        def read(self):
+            return json.dumps(
+                {"choices": [{"message": {"content": "SELECT 1"}}]}).encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(request, timeout=None):
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data)
+        captured["headers"] = request.headers
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    model = models.GroqModel(api_key="test-key")
+    assert model.complete("sys", "user") == "SELECT 1"
+
+    assert captured["url"].endswith("/chat/completions")
+    assert captured["body"]["model"] == "llama-3.3-70b-versatile"
+    # SQL generation wants determinism, not creativity.
+    assert captured["body"]["temperature"] == 0
+    assert captured["body"]["messages"][0]["content"] == "sys"
+    assert captured["headers"]["Authorization"] == "Bearer test-key"
+
+
+@pytest.mark.parametrize("code,expected", [
+    (401, "rejected the API key"),
+    (429, "rate limit"),
+])
+def test_http_errors_are_translated_into_useful_messages(monkeypatch, code, expected):
+    import urllib.error
+    from nl_to_sql_agent import models
+
+    def fake_urlopen(request, timeout=None):
+        raise urllib.error.HTTPError(
+            request.full_url, code, "err", {}, __import__("io").BytesIO(b"{}"))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(models.ModelError, match=expected):
+        models.GroqModel(api_key="k").complete("s", "u")
+
+
+def test_groq_requires_a_key(monkeypatch):
+    from nl_to_sql_agent import models
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    with pytest.raises(models.ModelError, match="console.groq.com"):
+        models.GroqModel()
+
+
+def test_ollama_needs_no_key(monkeypatch):
+    from nl_to_sql_agent import models
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    model = models.OllamaModel()
+    assert model.api_key is None
+    assert "localhost:11434" in model.base_url

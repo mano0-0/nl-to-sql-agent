@@ -46,3 +46,16 @@ def test_live_mode_without_a_key_explains_how_to_proceed(capsys, monkeypatch):
     # Either no key, or the SDK is absent -- both must name --offline.
     assert code == 2
     assert "--offline" in err or "anthropic" in err
+
+
+def test_groq_without_a_key_names_the_free_signup(capsys, monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    assert main(["--provider", "groq", "hello"]) == 2
+    err = capsys.readouterr().err
+    assert "console.groq.com" in err
+    assert "--offline" in err
+
+
+def test_groq_is_the_default_provider():
+    from nl_to_sql_agent.cli import build_parser
+    assert build_parser().parse_args(["q"]).provider == "groq"

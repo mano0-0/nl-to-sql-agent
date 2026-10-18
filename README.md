@@ -36,8 +36,35 @@ nl-sql --offline --demo             # no API key, no network
 nl-sql --offline --demo --show-sql  # with the pipeline trace
 ```
 
-For live answers, `pip install 'nl-to-sql-agent[anthropic]'` and set
-`ANTHROPIC_API_KEY`. Everything except the model call is identical.
+### Live answers, for free
+
+`--offline` replays prepared answers, so only the demo questions work. To ask
+anything you like, point it at a real model. **Groq's free tier needs no credit
+card** and is the default:
+
+```bash
+# key from https://console.groq.com/keys -- email signup, no card
+export GROQ_API_KEY=gsk_...
+nl-sql "which authors sell best in Japan?"
+nl-sql --show-sql "what is the average order value by region?"
+```
+
+Other providers, same pipeline:
+
+```bash
+nl-sql --provider ollama   "..."   # fully local, no key, no network
+nl-sql --provider anthropic "..."  # needs ANTHROPIC_API_KEY
+nl-sql --provider groq --model llama-3.1-8b-instant "..."
+```
+
+| provider | cost | setup |
+|---|---|---|
+| `groq` (default) | free tier, no card | `export GROQ_API_KEY=...` |
+| `ollama` | free, runs locally | `brew install ollama && ollama pull qwen2.5-coder:7b` |
+| `anthropic` | paid | `pip install '.[anthropic]'`, `ANTHROPIC_API_KEY` |
+
+Only the model call differs. Guard, database and prompts are identical, which
+is the point of keeping the model behind a two-method interface.
 
 ## The pipeline
 
@@ -127,7 +154,9 @@ fast rather than hanging the process.
 
 **The model is a protocol, not a dependency.** `LanguageModel` is a two-method
 interface. The full pipeline is tested against a scripted implementation, which
-is why the 34 tests need no API key and run in under a tenth of a second.
+is why the 41 tests need no API key and run in under a tenth of a second. Groq,
+Ollama and anything else speaking the OpenAI chat shape share one 60-line
+implementation; Anthropic has its own because its API differs.
 
 ## Project layout
 
@@ -135,13 +164,13 @@ is why the 34 tests need no API key and run in under a tenth of a second.
 src/nl_to_sql_agent/
     agent.py      the four-step pipeline
     database.py   read-only connection, schema rendering
-    models.py     the LanguageModel protocol, Claude and scripted versions
+    models.py     the LanguageModel protocol; Groq, Ollama, Claude, scripted
     config.py     the table allowlist and limits
     cli.py        terminal interface
     demo.py       scripted responses for the offline demo
 scripts/
     build_demo_db.py   generates the synthetic database (fixed seed)
-tests/                 34 tests, no network required
+tests/                 41 tests, no network required
 ```
 
 ## Related

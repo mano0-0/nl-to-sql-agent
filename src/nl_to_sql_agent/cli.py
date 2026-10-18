@@ -22,7 +22,7 @@ from .config import (
 )
 from .database import Database, DatabaseError
 from .demo import DEMO_QUESTIONS, build_scripted_model
-from .models import AnthropicModel, ModelError
+from .models import AnthropicModel, GroqModel, ModelError, OllamaModel
 
 DIM, BOLD, RED, GREEN, YELLOW, RESET = (
     "\033[2m", "\033[1m", "\033[31m", "\033[32m", "\033[33m", "\033[0m"
@@ -114,6 +114,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="path to the SQLite database")
     p.add_argument("--offline", action="store_true",
                    help="use scripted answers; no API key or network needed")
+    p.add_argument("--provider", choices=["groq", "anthropic", "ollama"],
+                   default="groq",
+                   help="which model to use for live answers (default: groq, "
+                        "whose free tier needs no credit card)")
+    p.add_argument("--model", help="override the provider's default model")
     p.add_argument("--demo", action="store_true",
                    help="run the built-in demo questions")
     p.add_argument("--show-sql", action="store_true",
@@ -123,6 +128,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-rows", type=int, default=10,
                    help="rows to display (default: 10)")
     return p
+
+
+def _build_model(args: argparse.Namespace):
+    """Construct the live model named by --provider."""
+    if args.provider == "groq":
+        return GroqModel(model=args.model)
+    if args.provider == "ollama":
+        return OllamaModel(model=args.model)
+    return AnthropicModel(model=args.model)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -148,7 +162,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
 
     try:
-        model = build_scripted_model() if args.offline else AnthropicModel()
+        model = build_scripted_model() if args.offline else _build_model(args)
     except ModelError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

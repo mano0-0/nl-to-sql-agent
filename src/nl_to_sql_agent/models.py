@@ -122,3 +122,116 @@ class AnthropicModel:
         if not parts:
             raise ModelError("model returned no text content")
         return "\n".join(parts)
+
+
+class OpenAICompatibleModel:
+    """Any provider exposing an OpenAI-style /chat/completions endpoint.
+
+    Groq, Together, OpenRouter, Fireworks and a local Ollama all speak this
+    shape, so one implementation covers them. Uses urllib rather than adding
+    an HTTP dependency for a single POST.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        model: str,
+        api_key: Optional[str] = None,
+        timeout: float = 60.0,
+        provider: str = "provider",
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.api_key = api_key
+        self.timeout = timeout
+        self.provider = provider
+
+    def complete(self, system: str, user: str, *, max_tokens: int = 1024) -> str:
+        import json
+        import urllib.error
+        import urllib.request
+
+        payload = json.dumps({
+            "model": self.model,
+            "max_tokens": max_tokens,
+            # SQL generation wants the likeliest answer, not a creative one.
+            "temperature": 0,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }).encode()
+
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        request = urllib.request.Request(
+            f"{self.base_url}/chat/completions", data=payload, headers=headers
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                body = json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode(errors="replace")[:400]
+            if exc.code == 401:
+                raise ModelError(
+                    f"{self.provider} rejected the API key (401). "
+                    "Check the key, or use --offline."
+                ) from exc
+            if exc.code == 429:
+                raise ModelError(
+                    f"{self.provider} rate limit reached (429). "
+                    "Wait a moment, or use --offline."
+                ) from exc
+            raise ModelError(f"{self.provider} returned {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise ModelError(f"could not reach {self.provider}: {exc.reason}") from exc
+        except TimeoutError as exc:
+            raise ModelError(f"{self.provider} timed out after {self.timeout}s") from exc
+
+        try:
+            return body["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ModelError(
+                f"unexpected response shape from {self.provider}: {str(body)[:200]}"
+            ) from exc
+
+
+class GroqModel(OpenAICompatibleModel):
+    """Groq's free tier. Sign up at console.groq.com/keys -- no card required."""
+
+    BASE_URL = "https://api.groq.com/openai/v1"
+    DEFAULT_MODEL = "llama-3.3-70b-versatile"
+
+    def __init__(
+        self, api_key: Optional[str] = None, model: Optional[str] = None
+    ) -> None:
+        key = api_key or os.environ.get("GROQ_API_KEY")
+        if not key:
+            raise ModelError(
+                "no Groq API key: set GROQ_API_KEY (free, no card, from "
+                "https://console.groq.com/keys), or use --offline."
+            )
+        super().__init__(
+            base_url=self.BASE_URL,
+            model=model or os.environ.get("GROQ_MODEL", self.DEFAULT_MODEL),
+            api_key=key,
+            provider="Groq",
+        )
+
+
+class OllamaModel(OpenAICompatibleModel):
+    """A model running locally via Ollama. No key, no network, no limits."""
+
+    BASE_URL = "http://localhost:11434/v1"
+    DEFAULT_MODEL = "qwen2.5-coder:7b"
+
+    def __init__(self, model: Optional[str] = None, base_url: Optional[str] = None) -> None:
+        super().__init__(
+            base_url=base_url or os.environ.get("OLLAMA_HOST", self.BASE_URL),
+            model=model or os.environ.get("OLLAMA_MODEL", self.DEFAULT_MODEL),
+            api_key=None,
+            provider="Ollama",
+        )
