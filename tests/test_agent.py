@@ -301,3 +301,42 @@ def test_ollama_needs_no_key(monkeypatch):
     model = models.OllamaModel()
     assert model.api_key is None
     assert "localhost:11434" in model.base_url
+
+
+def test_requests_send_a_user_agent(monkeypatch):
+    """Cloudflare in front of Groq rejects urllib's default UA with 403/1010."""
+    import json
+    from nl_to_sql_agent import models
+
+    captured = {}
+
+    class FakeResponse:
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(request, timeout=None):
+        captured["ua"] = request.get_header("User-agent")
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    models.GroqModel(api_key="k").complete("s", "u")
+
+    assert captured["ua"], "a User-Agent must be sent"
+    assert "Python-urllib" not in captured["ua"]
+
+
+def test_cdn_block_is_reported_as_such_not_as_an_api_error(monkeypatch):
+    import io
+    import urllib.error
+    from nl_to_sql_agent import models
+
+    def fake_urlopen(request, timeout=None):
+        raise urllib.error.HTTPError(
+            request.full_url, 403, "Forbidden", {},
+            io.BytesIO(b"error code: 1010"))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(models.ModelError, match="blocked by its CDN"):
+        models.GroqModel(api_key="k").complete("s", "u")

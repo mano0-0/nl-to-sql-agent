@@ -15,6 +15,9 @@ import re
 from typing import Dict, List, Optional, Protocol, Sequence
 
 
+USER_AGENT = "nl-to-sql-agent/0.1.0 (+https://github.com/mano0-0/nl-to-sql-agent)"
+
+
 class ModelError(RuntimeError):
     """Raised when the model cannot be reached or returns nothing usable."""
 
@@ -163,7 +166,14 @@ class OpenAICompatibleModel:
             ],
         }).encode()
 
-        headers = {"Content-Type": "application/json"}
+        headers = {
+            "Content-Type": "application/json",
+            # Identify the client. urllib's default ("Python-urllib/3.x") is
+            # blocked outright by Cloudflare in front of some providers --
+            # Groq returns 403 "error code: 1010" before the request ever
+            # reaches the API.
+            "User-Agent": USER_AGENT,
+        }
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
@@ -179,6 +189,11 @@ class OpenAICompatibleModel:
                 raise ModelError(
                     f"{self.provider} rejected the API key (401). "
                     "Check the key, or use --offline."
+                ) from exc
+            if exc.code == 403 and "1010" in detail:
+                raise ModelError(
+                    f"{self.provider} request blocked by its CDN (403/1010). "
+                    "This is usually a missing or rejected User-Agent header."
                 ) from exc
             if exc.code == 429:
                 raise ModelError(
