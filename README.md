@@ -1,0 +1,155 @@
+# nl-to-sql-agent
+
+Ask a database questions in plain English. The SQL the model writes is checked
+before it runs.
+
+```
+$ nl-sql --offline "Which five countries generated the most revenue?"
+
+  country  revenue
+  ------------------
+  Brazil   18,815.54
+  France   18,216.55
+  Spain    17,195.82
+  Japan    17,048.49
+  Germany  15,491.47
+
+  Brazil led with €18,815.54, just ahead of France at €18,216.55.
+```
+
+```
+$ nl-sql --offline "Show me the employee salaries"
+
+  The generated query was rejected: table 'employees' is not in the allowlist
+```
+
+The second case is the interesting one. `employees` exists in the database, and
+the model wrote a perfectly valid `SELECT` against it. The query never reached
+the database.
+
+## Try it
+
+```bash
+pip install -e ".[dev]"
+python scripts/build_demo_db.py     # generates a small synthetic bookshop DB
+nl-sql --offline --demo             # no API key, no network
+nl-sql --offline --demo --show-sql  # with the pipeline trace
+```
+
+For live answers, `pip install 'nl-to-sql-agent[anthropic]'` and set
+`ANTHROPIC_API_KEY`. Everything except the model call is identical.
+
+## The pipeline
+
+```
+  "Which five countries generated the most revenue?"
+        │
+   1 ── generate   ask the model for SQL, given only the allowed schema
+        │
+   2 ── guard      validate it with llm-sql-guard  ──✗──> refuse, with a reason
+        │
+   3 ── execute    run it on a read-only connection
+        │
+   4 ── explain    ask the model to describe the rows it got back
+        │
+  "Brazil led with €18,815.54..."
+```
+
+`--show-sql` prints this trace with timings, which is also how you debug a
+surprising answer: you can see exactly what was generated and what it read.
+
+## Two controls, doing different jobs
+
+The database connection is opened read-only (`mode=ro`), and the generated SQL
+is separately validated. These overlap, and the overlap is deliberate — but
+they are not interchangeable.
+
+| | read-only connection | llm-sql-guard |
+|---|---|---|
+| `DELETE`, `DROP`, `UPDATE` | **blocked by the engine** | blocked (redundantly) |
+| reading `employees` | allowed — it's a read | **blocked** |
+| `SELECT *` with no `LIMIT` | allowed | **blocked** |
+| `pg_read_file()`, `dblink()` | allowed — they're reads | **blocked** |
+| explains itself to the user | no | **yes** |
+| survives a bug in this code | **yes** | no |
+
+**The connection is the real guarantee.** It is enforced by the database, so a
+bug in this program cannot produce a write. If you keep one control, keep that.
+
+**The guard covers what read-only does not.** A read-only role happily runs
+`SELECT * FROM salaries`, returns fifty million rows, or reads a server file
+through `pg_read_file()`. Those are all reads.
+
+Being specific about the redundancy: **the write check is the one part of the
+guard that read-only makes unnecessary for safety.** It is kept for two lesser
+reasons — the user gets `only read queries are allowed, found DELETE` instead
+of `attempt to write a readonly database`, and a blocked write is a clean
+signal worth logging, since it means something upstream went wrong. The checks
+that genuinely add protection are the table allowlist, the row cap, the
+function denylist, and single-statement enforcement.
+
+## What the agent may not touch
+
+The demo database contains two tables the agent is never allowed to read:
+
+```
+employees (id, name, salary, national_id)
+api_keys  (id, owner, secret)
+```
+
+They are absent from `ALLOWED_TABLES` in `config.py`, so:
+
+1. they never appear in the schema the model is shown, and
+2. if the model names one anyway, the guard refuses the query.
+
+Step 2 matters because step 1 is not a control. A model can guess a table name,
+and a user can ask leadingly. Not showing it is a nudge; the allowlist is the
+boundary.
+
+## Design notes
+
+**The guard is a step, not an instruction.** Telling a model "only write safe
+SQL" in a prompt is a request it may decline. Validating the output is a rule
+it cannot. Prompt text is good for quality; it is not an access control.
+
+**A model failure is not a refusal.** If the API is unreachable, the user is
+told that — not "your question is out of scope". Masking an outage as a refusal
+trains people to distrust the correct refusals too.
+
+**Results are sampled, but the count is honest.** Only the first 40 rows go to
+the model, along with the true row count and a note saying so. Sending a sample
+without the count produces confident summaries of 40 rows as though they were
+all of them.
+
+**Runaway queries are interrupted.** SQLite's progress handler aborts a
+statement that burns through too many VM steps, so a cartesian product fails
+fast rather than hanging the process.
+
+**The model is a protocol, not a dependency.** `LanguageModel` is a two-method
+interface. The full pipeline is tested against a scripted implementation, which
+is why the 34 tests need no API key and run in under a tenth of a second.
+
+## Project layout
+
+```
+src/nl_to_sql_agent/
+    agent.py      the four-step pipeline
+    database.py   read-only connection, schema rendering
+    models.py     the LanguageModel protocol, Claude and scripted versions
+    config.py     the table allowlist and limits
+    cli.py        terminal interface
+    demo.py       scripted responses for the offline demo
+scripts/
+    build_demo_db.py   generates the synthetic database (fixed seed)
+tests/                 34 tests, no network required
+```
+
+## Related
+
+[llm-sql-guard](https://github.com/mano0-0/llm-sql-guard) — the validation
+library used in step 2, which walks the parsed syntax tree rather than
+pattern-matching the query text.
+
+## Licence
+
+MIT
