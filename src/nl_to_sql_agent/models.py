@@ -195,6 +195,14 @@ class OpenAICompatibleModel:
                     f"{self.provider} request blocked by its CDN (403/1010). "
                     "This is usually a missing or rejected User-Agent header."
                 ) from exc
+            if exc.code == 404 and "model" in detail:
+                raise ModelError(
+                    f"{self.provider} has no model {self.model!r} on this key "
+                    f"(404). List what your key can use with:\n"
+                    f"  curl {self.base_url}/models "
+                    f'-H "Authorization: Bearer $GROQ_API_KEY"\n'
+                    f"then pass one with --model."
+                ) from exc
             if exc.code == 429:
                 raise ModelError(
                     f"{self.provider} rate limit reached (429). "
@@ -218,7 +226,9 @@ class GroqModel(OpenAICompatibleModel):
     """Groq's free tier. Sign up at console.groq.com/keys -- no card required."""
 
     BASE_URL = "https://api.groq.com/openai/v1"
-    DEFAULT_MODEL = "llama-3.3-70b-versatile"
+    # Available on the free tier. The Llama models are Enterprise-only, so a
+    # free key gets 404 model_not_found for them.
+    DEFAULT_MODEL = "openai/gpt-oss-20b"
 
     def __init__(
         self, api_key: Optional[str] = None, model: Optional[str] = None

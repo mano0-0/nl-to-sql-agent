@@ -54,12 +54,21 @@ Other providers, same pipeline:
 ```bash
 nl-sql --provider ollama   "..."   # fully local, no key, no network
 nl-sql --provider anthropic "..."  # needs ANTHROPIC_API_KEY
-nl-sql --provider groq --model llama-3.1-8b-instant "..."
+nl-sql --provider groq --model openai/gpt-oss-120b "..."   # larger
 ```
 
 | provider | cost | setup |
 |---|---|---|
 | `groq` (default) | free tier, no card | `export GROQ_API_KEY=...` |
+
+Groq's default here is `openai/gpt-oss-20b`, which a free key can use. Its
+Llama models are Enterprise-tier and return `404 model_not_found` on a free
+key. To see what yours can reach:
+
+```bash
+curl https://api.groq.com/openai/v1/models -H "Authorization: Bearer $GROQ_API_KEY"
+```
+
 | `ollama` | free, runs locally | `brew install ollama && ollama pull qwen2.5-coder:7b` |
 | `anthropic` | paid | `pip install '.[anthropic]'`, `ANTHROPIC_API_KEY` |
 

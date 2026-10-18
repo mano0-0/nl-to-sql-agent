@@ -260,11 +260,12 @@ def test_openai_compatible_model_sends_and_parses_correctly(monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    model = models.GroqModel(api_key="test-key")
+    from nl_to_sql_agent.models import GroqModel
+    model = GroqModel(api_key="test-key")
     assert model.complete("sys", "user") == "SELECT 1"
 
     assert captured["url"].endswith("/chat/completions")
-    assert captured["body"]["model"] == "llama-3.3-70b-versatile"
+    assert captured["body"]["model"] == GroqModel.DEFAULT_MODEL
     # SQL generation wants determinism, not creativity.
     assert captured["body"]["temperature"] == 0
     assert captured["body"]["messages"][0]["content"] == "sys"
